@@ -76,8 +76,17 @@ class _FakeDiscovery:
 
 @pytest.fixture
 async def threadhaus(hass: HomeAssistant, enable_custom_integrations,
-                     monkeypatch):
-    """Zwei Border Router auf zwei Netzen, einer davon mit Geraet im Haus."""
+                     mock_async_zeroconf, monkeypatch):
+    """Zwei Border Router auf zwei Netzen, einer davon mit Geraet im Haus.
+
+    ``mock_async_zeroconf`` ist Pflicht, nicht Zierrat: die
+    Thread-Integration haengt an zeroconf, und sobald deren Pakete
+    installiert sind, faehrt es beim Import wirklich hoch. Sein Abbau
+    laeuft dann in einem eigenen Thread gegen eine Ereignisschleife, die
+    pytest gerade schliesst -- 'Event loop is closed', aus dem Abbau
+    heraus, bei bestandenen Tests. Die Vorrichtung des Testpakets haelt
+    zeroconf von vornherein an der Leine.
+    """
     from homeassistant.components.thread import dataset_store, discovery
 
     bereiche = ar.async_get(hass)
