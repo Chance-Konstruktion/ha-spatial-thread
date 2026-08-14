@@ -29,10 +29,27 @@ party can read -- and the Matter layer already draws it in its room.
 Guessing which devices are on Thread would be inventing the one thing this
 layer would be believed about.
 
-Border routers get no area. They are discovered over the network, not
-created in the device registry, so there is no room to inherit and nothing
-here will pretend otherwise: the hub places them and the user drags each
-one where it belongs, once.
+Border routers are discovered over the network, not created in the device
+registry -- so there is no room attached to the discovery itself. But the
+box usually *is* in Home Assistant under its own integration: an Apple TV,
+a HomePod, Home Assistant's own radio. Where that device can be identified,
+its area and one of its entities are carried over, so the router lands in
+the room the user already put it in and the plan has a door back into Home
+Assistant.
+
+Identified means identified, not guessed at: the extended address against
+the device's connections, or -- only when it matches exactly one device --
+the mDNS hostname against the device name. Which of the two was used is
+written onto the node, so a router in the wrong room can be traced instead
+of merely being wrong. Where neither matches, the router keeps no area at
+all and the hub places it, which is the honest answer.
+
+There are no anchors here either, and that is not an omission. Anchoring
+needs a distance-like measurement to something already placed, and mDNS
+discovery has none: it says a router exists and what it serves, never how
+far away it is. The Thread mesh itself would have that, but Home Assistant
+does not expose it -- reading it would mean talking to each border router's
+own API, which is a different project.
 """
 
 from __future__ import annotations
@@ -42,6 +59,10 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.event import async_track_time_interval
 
 from .spatial_hub_provider import edge, node, spatial_provider
@@ -134,7 +155,80 @@ def _router_label(address: str, router: Any) -> str:
     return address
 
 
-def _router_node(address: str, router: Any, networks: dict[str, dict[str, Any]]) -> dict:
+def _geraet_zum_router(hass: HomeAssistant, router: Any) -> tuple[Any, str | None, str | None]:
+    """Das Home-Assistant-Geraet hinter einem Border Router, wenn es eines gibt.
+
+    Ein Border Router ist eine Kiste, die irgendwo steht -- ein Apple TV,
+    ein HomePod, ein SkyConnect am Server. Steht sie in Home Assistant,
+    hat der Nutzer ihr laengst einen Raum gegeben, und dann gehoert der
+    Punkt dorthin statt in die Mitte des Grundrisses.
+
+    Zwei Wege, und der zweite nur, wenn er eindeutig ist:
+
+    1. Die **erweiterte Adresse** unter den Verbindungen des Geraets. Das
+       ist eine Kennung, keine Aehnlichkeit -- ein Treffer ist ein Treffer.
+    2. Der **mDNS-Hostname** gegen den Geraetenamen. Fuzzy, deshalb nur
+       bei genau einem Treffer: zwei HomePods im Haus heissen aehnlich,
+       und den falschen zu waehlen ist schlechter als keinen.
+
+    Wie verknuepft wurde, steht am Knoten. Ein Nutzer, der einen Punkt im
+    falschen Raum sieht, soll nachsehen koennen, warum.
+    """
+    try:
+        registry = dr.async_get(hass)
+    except (AttributeError, KeyError):  # pragma: no cover
+        return None, None, None
+
+    eui = str(getattr(router, "extended_address", "") or "").strip().lower()
+    if eui:
+        for geraet in registry.devices.values():
+            for _art, wert in getattr(geraet, "connections", ()) or ():
+                if str(wert).strip().lower().replace(":", "") == eui.replace(":", ""):
+                    return geraet, "kennung", None
+
+    server = str(getattr(router, "server", "") or "").strip().lower()
+    name = server.removesuffix(".").removesuffix(".local")
+    if len(name) >= 4:
+        treffer = [
+            geraet
+            for geraet in registry.devices.values()
+            if name in str(
+                getattr(geraet, "name_by_user", None)
+                or getattr(geraet, "name", "")
+                or ""
+            ).strip().lower().replace(" ", "-")
+        ]
+        if len(treffer) == 1:
+            return treffer[0], "hostname", None
+    return None, None, None
+
+
+def _tuer(hass: HomeAssistant, device_id: str) -> str | None:
+    """Die Entitaet, die ein Nutzer meint, wenn er auf das Geraet tippt."""
+    try:
+        registry = er.async_get(hass)
+        eintraege = er.async_entries_for_device(
+            registry, device_id, include_disabled_entities=False
+        )
+    except (AttributeError, KeyError, TypeError):  # pragma: no cover
+        return None
+    if not eintraege:
+        return None
+    return sorted(
+        eintraege,
+        key=lambda eintrag: (
+            getattr(eintrag, "entity_category", None) is not None,
+            eintrag.entity_id,
+        ),
+    )[0].entity_id
+
+
+def _router_node(
+    hass: HomeAssistant,
+    address: str,
+    router: Any,
+    networks: dict[str, dict[str, Any]],
+) -> dict:
     pan = _pan(getattr(router, "extended_pan_id", ""))
     network = networks.get(pan)
     agent = str(getattr(router, "border_agent_id", "") or "").lower()
@@ -143,9 +237,16 @@ def _router_node(address: str, router: Any, networks: dict[str, dict[str, Any]])
     unconfigured = bool(getattr(router, "unconfigured", False))
     preferred = bool(network and agent and network["border_agent"] == agent)
 
+    geraet, ueber, _ = _geraet_zum_router(hass, router)
+
     return node(
         f"router-{address}",
         label=_router_label(address, router),
+        # Wo der Nutzer die Kiste hingestellt hat -- er weiss es, mDNS
+        # nicht. Ohne Geraet bleibt beides leer, und der Hub legt den
+        # Punkt in die Mitte, was ehrlicher ist als ein geratener Raum.
+        area_id=getattr(geraet, "area_id", None) if geraet else None,
+        entity_id=_tuer(hass, geraet.id) if geraet else None,
         state="unknown" if unconfigured else "online",
         icon="mdi:router-wireless-off" if unconfigured else (
             "mdi:router-wireless" if preferred else "mdi:access-point"
@@ -161,6 +262,9 @@ def _router_node(address: str, router: Any, networks: dict[str, dict[str, Any]])
         bevorzugt="ja" if preferred else "nein",
         eingerichtet="nein" if unconfigured else "ja",
         adresse=address,
+        # Wie die Verknuepfung zustande kam, damit ein Punkt im falschen
+        # Raum nachvollziehbar ist statt nur falsch.
+        **({"verknuepft_ueber": ueber} if ueber else {}),
     )
 
 
@@ -210,7 +314,7 @@ def async_setup_spatial(hass: HomeAssistant, entry: Any) -> None:
             )
 
         for address, router in sorted(routers.items()):
-            nodes.append(_router_node(address, router, networks))
+            nodes.append(_router_node(hass, address, router, networks))
             pan = _pan(getattr(router, "extended_pan_id", ""))
             if pan in networks:
                 edges.append(
