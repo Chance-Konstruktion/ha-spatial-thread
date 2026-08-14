@@ -119,15 +119,25 @@ def threadhaus(hass: HomeAssistant, enable_custom_integrations, monkeypatch):
         return _Speicher()
 
     monkeypatch.setattr(dataset_store, "async_get_store", _speicher)
-    return hass
 
-
-def _anmeldung(hass: HomeAssistant) -> dict:
-    from custom_components.spatial_thread.spatial import async_setup_spatial
-
+    # Der Adapter haengt seinen Abbau an den Config Entry: die
+    # Entdeckung wird gestoppt, der Zeitgeber abgemeldet. Wird der Eintrag
+    # nie entladen, laeuft beides erst beim Abraeumen der Vorrichtung --
+    # und dann ist die Ereignisschleife schon zu. Deshalb gehoert der
+    # Eintrag hierher und wird hier auch wieder abgeraeumt.
     eigener = MockConfigEntry(domain=EIGENE_DOMAIN, title="Spatial Thread")
     eigener.add_to_hass(hass)
-    async_setup_spatial(hass, eigener)
+    yield hass, eigener
+
+    hass.data.get("spatial_hub_providers", {}).pop(EIGENE_DOMAIN, None)
+    eigener.async_on_unload_callbacks = []
+
+
+def _anmeldung(threadhaus) -> dict:
+    from custom_components.spatial_thread.spatial import async_setup_spatial
+
+    hass, eintrag = threadhaus
+    async_setup_spatial(hass, eintrag)
     return hass.data["spatial_hub_providers"][EIGENE_DOMAIN]
 
 
@@ -140,16 +150,14 @@ class TestKonformitaetMitInhalt(SpatialHubConformance):
 
     @pytest.fixture(autouse=True)
     def _binden(self, threadhaus):
-        self._hass = threadhaus
+        self._haus = threadhaus
         yield
 
     def build_registration(self):
-        return _anmeldung(self._hass)
+        return _anmeldung(self._haus)
 
 
-async def test_zwei_netze_werden_als_zwei_haufen_gezeichnet(
-    threadhaus, hass: HomeAssistant
-) -> None:
+async def test_zwei_netze_werden_als_zwei_haufen_gezeichnet(threadhaus) -> None:
     """Die Gegenprobe, und der eigentliche Grund fuer diese Datei.
 
     Ein Konformitaetssatz ueber einer leeren Liste ist gruen und sagt
@@ -160,7 +168,8 @@ async def test_zwei_netze_werden_als_zwei_haufen_gezeichnet(
     Router, beide Netze, und der Apple TV im Wohnzimmer statt in der
     Mitte des Grundrisses.
     """
-    anmeldung = _anmeldung(hass)
+    hass, _ = threadhaus
+    anmeldung = _anmeldung(threadhaus)
     await hass.async_block_till_done()
 
     nutzlast = await anmeldung["data"]()
