@@ -75,8 +75,8 @@ class _FakeDiscovery:
 
 
 @pytest.fixture
-async def threadhaus(hass: HomeAssistant, enable_custom_integrations,
-                     mock_async_zeroconf, monkeypatch):
+async def threadhaus(mock_async_zeroconf, hass: HomeAssistant,
+                     enable_custom_integrations, monkeypatch):
     """Zwei Border Router auf zwei Netzen, einer davon mit Geraet im Haus.
 
     ``mock_async_zeroconf`` ist Pflicht, nicht Zierrat: die
