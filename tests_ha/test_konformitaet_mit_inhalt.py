@@ -75,7 +75,8 @@ class _FakeDiscovery:
 
 
 @pytest.fixture
-def threadhaus(hass: HomeAssistant, enable_custom_integrations, monkeypatch):
+async def threadhaus(hass: HomeAssistant, enable_custom_integrations,
+                     monkeypatch):
     """Zwei Border Router auf zwei Netzen, einer davon mit Geraet im Haus."""
     from homeassistant.components.thread import dataset_store, discovery
 
@@ -120,17 +121,28 @@ def threadhaus(hass: HomeAssistant, enable_custom_integrations, monkeypatch):
 
     monkeypatch.setattr(dataset_store, "async_get_store", _speicher)
 
-    # Der Adapter haengt seinen Abbau an den Config Entry: die
-    # Entdeckung wird gestoppt, der Zeitgeber abgemeldet. Wird der Eintrag
-    # nie entladen, laeuft beides erst beim Abraeumen der Vorrichtung --
-    # und dann ist die Ereignisschleife schon zu. Deshalb gehoert der
-    # Eintrag hierher und wird hier auch wieder abgeraeumt.
+    # Der Adapter haengt seinen Abbau an den Config Entry: Entdeckung
+    # stoppen, Zeitgeber abmelden, Anmeldung zuruecknehmen. Ausgeloest
+    # wird das sonst erst, wenn pytest die hass-Vorrichtung abraeumt --
+    # und da ist die Ereignisschleife bereits zu, was als "Event loop is
+    # closed" aus dem Abbau heraus knallt.
+    #
+    # Der Eintrag gehoert deshalb hierher, und die Haken werden hier von
+    # Hand gerufen, solange die Schleife noch laeuft. Das ist derselbe
+    # Weg, den Home Assistant beim Entladen geht -- nur zum richtigen
+    # Zeitpunkt.
     eigener = MockConfigEntry(domain=EIGENE_DOMAIN, title="Spatial Thread")
     eigener.add_to_hass(hass)
     yield hass, eigener
 
+    for name in ("_on_unload", "_on_unload_callbacks"):
+        haken = getattr(eigener, name, None)
+        if haken:
+            for aufruf in list(haken):
+                aufruf()
+            break
+    await hass.async_block_till_done()
     hass.data.get("spatial_hub_providers", {}).pop(EIGENE_DOMAIN, None)
-    eigener.async_on_unload_callbacks = []
 
 
 def _anmeldung(threadhaus) -> dict:
