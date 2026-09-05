@@ -77,6 +77,31 @@ REFRESH = timedelta(minutes=5)
 _UNKNOWN_NETWORK = "unbekannt"
 
 
+def _registry_entries(registry: Any) -> list[Any]:
+    """Every device entry, without the deprecated mapping view.
+
+    ``registry.devices`` used to be a plain mapping, so ``.values()`` was
+    the way in. Core deprecated that in 2025.9 -- reading it as a mapping
+    logs a warning on every call and stops working in 2027.9. Iterating
+    the object itself yields the entries instead.
+
+    Both spellings live here because this integration still declares
+    2024.4 as its floor, and on those versions iterating yields the keys.
+    A key is a string, which an entry never is -- so the old shape is
+    recognised without asking Core for its version. On a current install
+    the subscript is never reached, which is the point: no warning.
+    """
+    devices = getattr(registry, "devices", None)
+    if not devices:
+        return []
+    entries: list[Any] = []
+    for entry in devices:
+        if isinstance(entry, str):  # pre-2025.9: iteration yields keys
+            entry = devices[entry]
+        entries.append(entry)
+    return entries
+
+
 def _pan(value: Any) -> str:
     """One spelling of an extended PAN ID, so two sources can be compared.
 
@@ -181,7 +206,7 @@ def _geraet_zum_router(hass: HomeAssistant, router: Any) -> tuple[Any, str | Non
 
     eui = str(getattr(router, "extended_address", "") or "").strip().lower()
     if eui:
-        for geraet in registry.devices.values():
+        for geraet in _registry_entries(registry):
             for _art, wert in getattr(geraet, "connections", ()) or ():
                 if str(wert).strip().lower().replace(":", "") == eui.replace(":", ""):
                     return geraet, "kennung", None
@@ -191,7 +216,7 @@ def _geraet_zum_router(hass: HomeAssistant, router: Any) -> tuple[Any, str | Non
     if len(name) >= 4:
         treffer = [
             geraet
-            for geraet in registry.devices.values()
+            for geraet in _registry_entries(registry)
             if name in str(
                 getattr(geraet, "name_by_user", None)
                 or getattr(geraet, "name", "")
