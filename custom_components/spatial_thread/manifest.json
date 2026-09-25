@@ -1,6 +1,6 @@
 {
   "domain": "spatial_thread",
-  "name": "Spatial Hub: Thread",
+  "name": "spatial-hub: thread",
   "after_dependencies": [
     "thread",
     "otbr"
