@@ -320,16 +320,25 @@ def async_setup_spatial(hass: HomeAssistant, entry: Any) -> None:
 
         nodes = []
         edges = []
-        # Only networks that something actually serves, plus every network
-        # the store knows. A stored network with no router is worth seeing:
-        # it is exactly what a house looks like after a border router dies.
+        # A dataset is persisted configuration, not proof that a border
+        # router is currently advertising this network. Keep stored-only
+        # networks visible, but distinguish them from networks observed via
+        # live router discovery.
+        router_pans = {
+            _pan(getattr(router, "extended_pan_id", ""))
+            for router in routers.values()
+        }
         for pan, network in networks.items():
+            active = pan in router_pans
             nodes.append(
                 node(
                     f"network-{pan}",
                     label=network["name"],
-                    state="online",
-                    icon="mdi:lan" if network["preferred"] else "mdi:lan-pending",
+                    state="online" if active else "unknown",
+                    icon=(
+                        "mdi:lan-disconnect" if not active else
+                        ("mdi:lan" if network["preferred"] else "mdi:lan-pending")
+                    ),
                     rolle="Thread-Netzwerk",
                     kanal=network["channel"],
                     pan_id=pan,
