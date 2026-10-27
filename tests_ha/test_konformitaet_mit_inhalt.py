@@ -177,6 +177,44 @@ class TestKonformitaetMitInhalt(SpatialHubConformance):
         return _anmeldung(self._haus)
 
 
+async def test_stored_network_without_discovered_router_is_not_online(
+    threadhaus, monkeypatch
+) -> None:
+    """A saved dataset is not evidence that a live border router exists."""
+    from custom_components.spatial_thread.spatial import async_setup_spatial
+
+    hass, entry = threadhaus
+    pan_ohne_router = "7766554433221100"
+    dataset_store = sys.modules["homeassistant.components.thread.dataset_store"]
+
+    class _SavedDataset:
+        id = "saved-only"
+        extended_pan_id = pan_ohne_router
+        network_name = "Gespeichertes Netz"
+        channel = 20
+        preferred_border_agent_id = "agent-not-discovered"
+        source = "otbr"
+
+    class _SavedStore:
+        preferred_dataset = "saved-only"
+        datasets = {"saved-only": _SavedDataset()}
+
+    async def _saved_store(_hass):
+        return _SavedStore()
+
+    monkeypatch.setattr(dataset_store, "async_get_store", _saved_store)
+    async_setup_spatial(hass, entry)
+    await hass.async_block_till_done()
+
+    registration = hass.data["spatial_hub_providers"][EIGENE_DOMAIN]
+    payload = await registration["data"]()
+    networks = {item["id"]: item for item in payload["nodes"]}
+    saved = networks[f"network-{pan_ohne_router}"]
+
+    assert saved["state"] == "unknown"
+    assert saved["icon"] == "mdi:lan-disconnect"
+
+
 async def test_zwei_netze_werden_als_zwei_haufen_gezeichnet(threadhaus) -> None:
     """Die Gegenprobe, und der eigentliche Grund fuer diese Datei.
 
